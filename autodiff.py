@@ -31,8 +31,16 @@ class Node(object):
 
     def __mul__(self, other):
         """TODO: Your code here"""
+        # 是否需要区分向量和标量
+        if isinstance(other, Node):
+            new_node = mul_op(self, other)
+        else:
+            # Add by a constant stores the constant in the new node's const_attr field.
+            # 'other' argument is a constant
+            new_node = mul_byconst_op(self, other)
+        return new_node
 
-    # Allow left-hand-side add and multiply.
+    # Allow left-hand-side add and multiply. for constant add / mulpltiply
     __radd__ = __add__
     __rmul__ = __mul__
 
@@ -137,10 +145,13 @@ class MulOp(Op):
     def compute(self, node, input_vals):
         """Given values of two input nodes, return result of element-wise multiplication."""
         """TODO: Your code here"""
+        assert len(input_vals) == 2
+        return input_vals[0] * input_vals[1]
 
     def gradient(self, node, output_grad):
         """Given gradient of multiply node, return gradient contributions to each input."""
         """TODO: Your code here"""
+        return [output_grad * node.inputs[1], output_grad * node.inputs[0]]
 
 class MulByConstOp(Op):
     """Op to element-wise multiply a nodes by a constant."""
@@ -154,10 +165,13 @@ class MulByConstOp(Op):
     def compute(self, node, input_vals):
         """Given values of input node, return result of element-wise multiplication."""
         """TODO: Your code here"""
+        assert len(input_vals) == 1
+        return input_vals[0] * node.const_attr
 
     def gradient(self, node, output_grad):
         """Given gradient of multiplication node, return gradient contribution to input."""
         """TODO: Your code here"""
+        return [output_grad * node.const_attr]
 
 class MatMulOp(Op):
     """Op to matrix multiply two nodes."""
@@ -185,6 +199,12 @@ class MatMulOp(Op):
     def compute(self, node, input_vals):
         """Given values of input nodes, return result of matrix multiplication."""
         """TODO: Your code here"""
+        # Y = AB, order matters 
+        # check if transpoe the matrix
+        a = input_vals[0] if not node.matmul_attr_trans_A else np.transpose(input_vals[0])
+        b = input_vals[1] if not node.matmul_attr_trans_B else np.transpose(input_vals[1])
+        return np.matmul(a, b)
+        
 
     def gradient(self, node, output_grad):
         """Given gradient of multiply node, return gradient contributions to each input.
@@ -192,6 +212,7 @@ class MatMulOp(Op):
         Useful formula: if Y=AB, then dA=dY B^T, dB=A^T dY
         """
         """TODO: Your code here"""
+        return [self(output_grad, node.inputs[1], trans_A=False,trans_B=True), self(node.inputs[0], output_grad, trans_A=True,trans_B=False)]
 
 class PlaceholderOp(Op):
     """Op to feed value to a nodes."""
@@ -276,6 +297,12 @@ class Executor:
         # Traverse graph in topological sort order and compute values for all nodes.
         topo_order = find_topo_sort(self.eval_node_list)
         """TODO: Your code here"""
+        for node in topo_order:
+            if node in node_to_val_map:
+                # skip placeholder
+                continue
+            input_vals = [node_to_val_map[n] for n in node.inputs]
+            node_to_val_map[node] = node.op.compute(node, input_vals)
 
         # Collect node values.
         node_val_results = [node_to_val_map[node] for node in self.eval_node_list]
@@ -306,8 +333,17 @@ def gradients(output_node, node_list):
     # Traverse graph in reverse topological order given the output_node that we are taking gradient wrt.
     reverse_topo_order = reversed(find_topo_sort([output_node]))
 
-    """TODO: Your code here"""
-
+    """TODO: Your code here""" 
+    for idx,node in enumerate(reverse_topo_order): # construct the computation graph
+        grad = sum_node_list(node_to_output_grads_list[node])
+        node_to_output_grad[node] = grad
+        input_grads = node.op.gradient(node, grad)
+        if input_grads is None: # not input node
+            continue
+        for i_grad, i_node in zip(input_grads, node.inputs):
+            if i_node not in node_to_output_grads_list:
+                node_to_output_grads_list[i_node] = []
+            node_to_output_grads_list[i_node].append(i_grad)
     # Collect results for gradients requested.
     grad_node_list = [node_to_output_grad[node] for node in node_list]
     return grad_node_list
@@ -345,3 +381,19 @@ def sum_node_list(node_list):
     from operator import add
     from functools import reduce
     return reduce(add, node_list)
+
+
+if __name__ == "__main__":
+    # debug here
+    x1 = Variable(name = "x1")
+    x2 = Variable(name = "x2")
+    y = x1 * x2 + x1
+    x1_val, x2_val = 20 * np.ones(1), 10 * np.ones(1)
+    # forward
+    # executor = Executor([y])
+    # y_val = executor.run(feed_dict = {x1 : x1_val, x2 : x2_val})
+    # backward
+    grad_x1, grad_x2 = gradients(y, [x1, x2])
+    executor = Executor([y, grad_x1, grad_x2])
+    y_val, grad_x1_val, grad_x2_val = executor.run(feed_dict = {x1 : x1_val, x2 : x2_val})
+    print(y_val, grad_x1_val, grad_x2_val)
